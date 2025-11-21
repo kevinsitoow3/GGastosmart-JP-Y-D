@@ -1,3 +1,4 @@
+// src/pages/IncomeExpenses.jsx
 import React, { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { format } from 'date-fns'
@@ -10,6 +11,8 @@ import { formatCurrency } from '../config/config'
 import { useAuth } from '../contexts/AuthContext'
 import { useBalance } from '../contexts/BalanceContext'
 import './IncomeExpenses.css'
+import useRecommendations from "../hooks/useRecommendations";
+import RecommendationModal from "../components/RecommendationModal";
 
 const IncomeExpenses = () => {
   const { user } = useAuth()
@@ -27,10 +30,23 @@ const IncomeExpenses = () => {
 
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm()
 
+  // --- Recomendaciones: estados y hook ---
+  const [modalOpen, setModalOpen] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyError, setApplyError] = useState(null);
+
+  const {
+    callRecommendations,
+    loading: recLoading,
+    error: recError,
+    data: recData
+  } = useRecommendations("/api");
+  // ----------------------------------------
+
   // Income categories matching the prototype
   const incomeCategories = [
     'Salario',
-    'Freelance', 
+    'Freelance',
     'Inversiones',
     'Ventas',
     'Bonificaciones',
@@ -58,30 +74,30 @@ const IncomeExpenses = () => {
   // Función para formatear números con separador de miles (formato colombiano)
   const formatNumberWithThousands = (value) => {
     if (!value) return ''
-    
+
     // Remover todo excepto números y coma decimal
     let numericValue = value.toString().replace(/[^\d,]/g, '')
-    
+
     // Si hay más de una coma, mantener solo la última
     const commaCount = (numericValue.match(/,/g) || []).length
     if (commaCount > 1) {
       const lastCommaIndex = numericValue.lastIndexOf(',')
       numericValue = numericValue.substring(0, lastCommaIndex).replace(/,/g, '') + numericValue.substring(lastCommaIndex)
     }
-    
+
     // Separar parte entera y decimal
     const parts = numericValue.split(',')
-    
+
     // Formatear parte entera con separador de miles (punto)
     if (parts[0]) {
       parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.')
     }
-    
+
     // Reunir las partes (máximo 2 decimales)
     if (parts.length > 1) {
       return parts[0] + ',' + parts[1].slice(0, 2)
     }
-    
+
     return parts[0] || ''
   }
 
@@ -97,7 +113,7 @@ const IncomeExpenses = () => {
     const inputValue = e.target.value
     const formattedValue = formatNumberWithThousands(inputValue)
     setAmountValue(formattedValue)
-    
+
     // Actualizar el campo hidden para validación en tiempo real
     const parsedValue = parseFormattedNumber(formattedValue)
     setValue('amount', parsedValue)
@@ -110,44 +126,44 @@ const IncomeExpenses = () => {
 
   // Calcular el total de gastos basado en las transacciones locales
   const calculateTotalExpenses = () => {
-    return expenseTransactions.reduce((sum, transaction) => sum + transaction.amount, 0)
+    return expenseTransactions.reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0)
   }
 
   // Calcular el total de ingresos basado en las transacciones locales
   const calculateTotalIncome = () => {
-    return incomeTransactions.reduce((sum, transaction) => sum + transaction.amount, 0)
+    return incomeTransactions.reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0)
   }
 
   const loadData = async () => {
     try {
       setLoading(true)
       setError(null)
-      
+
       const currentDate = new Date()
       const year = currentDate.getFullYear()
       const month = currentDate.getMonth() + 1
-      
+
       // Crear fechas para el período mensual actual
       const dateFrom = new Date(year, month - 1, 1) // Primer día del mes
       const dateTo = new Date(year, month, 0) // Último día del mes
-      
+
       const [stats, transactions] = await Promise.all([
         apiService.transactions.getStats(dateFrom.toISOString(), dateTo.toISOString()),
         apiService.transactions.getTransactions({ limit: 50 })
       ])
-      
+
       setMonthlySummary(stats)
-      
+
       // Asegurar que transactions sea un array
       const transactionsArray = Array.isArray(transactions) ? transactions : []
-      
+
       // Separar por tipo
       const incomes = transactionsArray.filter(t => t.type === 'income')
       const expenses = transactionsArray.filter(t => t.type === 'expense')
-      
+
       setIncomeTransactions(incomes)
       setExpenseTransactions(expenses)
-      
+
     } catch (err) {
       setError(err.message)
       console.error('Error cargando transacciones:', err)
@@ -162,7 +178,7 @@ const IncomeExpenses = () => {
     try {
       setSaving(true)
       setError(null)
-      
+
       // Validar que el monto sea válido
       const parsedAmount = parseFormattedNumber(amountValue)
       if (!parsedAmount || parsedAmount <= 0) {
@@ -170,10 +186,10 @@ const IncomeExpenses = () => {
         setSaving(false)
         return
       }
-      
+
       // Actualizar el valor del campo hidden para validación
       setValue('amount', parsedAmount)
-      
+
       const transactionData = {
         type: transactionType,
         amount: parsedAmount,
@@ -181,28 +197,28 @@ const IncomeExpenses = () => {
         description: data.description || '',
         date: new Date(data.date).toISOString()
       }
-      
+
       console.log('Guardando transacción:', transactionData)
-      
+
       // Guardar la transacción
       if (editingTransaction) {
         await apiService.transactions.update(editingTransaction.id, transactionData)
       } else {
         await apiService.transactions.create(transactionData)
       }
-      
+
       // Cerrar el formulario inmediatamente para mejorar la experiencia del usuario
       setShowAddForm(false)
       setEditingTransaction(null)
       setAmountValue('') // Limpiar el valor formateado
       reset()
-      
+
       // Recargar datos después de cerrar el formulario
       await loadData()
-      
+
       // Refrescar saldo global
       await refreshBalance()
-      
+
     } catch (err) {
       console.error('Error guardando transacción:', err)
       setError(err.message || 'Error al guardar la transacción. Intente nuevamente.')
@@ -215,7 +231,7 @@ const IncomeExpenses = () => {
   const handleEdit = (transaction) => {
     setEditingTransaction(transaction)
     setTransactionType(transaction.type)
-    const formattedAmount = formatNumberWithThousands(transaction.amount.toString())
+    const formattedAmount = formatNumberWithThousands(String(transaction.amount || ''))
     setAmountValue(formattedAmount)
     setValue('amount', transaction.amount)
     setValue('category', transaction.category)
@@ -228,12 +244,12 @@ const IncomeExpenses = () => {
     if (!window.confirm('¿Estás seguro de eliminar esta transacción?')) {
       return
     }
-    
+
     try {
       setError(null)
       await apiService.transactions.delete(transactionId)
       await loadData()
-      
+
       // Refrescar saldo global
       await refreshBalance()
     } catch (err) {
@@ -250,7 +266,102 @@ const IncomeExpenses = () => {
     setError(null)
   }
 
+  // -------------------------
+  // FUNCIONES DE RECOMENDACIONES
+  // -------------------------
+  /**
+   * handleGenerate:
+   * - monta payload desde expenseTransactions
+   * - usa calculateCurrentBalance() como presupuesto por defecto
+   * - llama a callRecommendations(budget, payload)
+   * - abre modal con resultados (recData)
+   */
+  const handleGenerate = async () => {
+    try {
+      const payload = expenseTransactions.map(e => ({
+        id: e.id ?? String(e._id ?? Date.now()),
+        name: e.description || e.category || "Gasto",
+        category: e.category || "Otros",
+        amount: Number(e.amount || 0),
+        essential: typeof e.essential === 'boolean' ? e.essential : false,
+        max_cut_fraction: e.max_cut_fraction !== undefined ? Number(e.max_cut_fraction) : undefined,
+      }));
 
+      // Usamos el balance actual como presupuesto por defecto (ajústalo si prefieres)
+      const budget = calculateCurrentBalance();
+
+      await callRecommendations(budget, payload);
+      setModalOpen(true);
+    } catch (err) {
+      console.error("Error generando recomendaciones:", err);
+      setError(err.message || "Error al generar recomendaciones");
+    }
+  };
+
+  /**
+   * applyRecommendationsPersistent:
+   * - Aplica las recomendaciones en memoria y opcionalmente persiste en backend
+   * - recData debe tener structure { recommendations: [...] }
+   */
+  const applyRecommendationsPersistent = async (persist = true) => {
+    if (!recData || !recData.recommendations) return;
+
+    setApplyLoading(true)
+    setApplyError(null)
+
+    try {
+      // Aplicar en memoria
+      const updated = expenseTransactions.map(t => {
+        const r = recData.recommendations.find(rr => rr.id === (t.id ?? String(t._id)))
+        if (r) return { ...t, amount: Number(r.recommended_amount) }
+        return t
+      })
+      setExpenseTransactions(updated)
+
+      // Persistir en backend si se solicita
+      if (persist) {
+        // Hacer actualizaciones en paralelo (pero sin saturar si es mucha carga)
+        const updates = recData.recommendations.map(async (r) => {
+          const txId = r.id
+          const newAmount = Number(r.recommended_amount)
+          // Solo actualizar si existe transacción real y amount difiere
+          const existing = expenseTransactions.find(t => (t.id ?? String(t._id)) === txId)
+          if (existing && Number(existing.amount) !== newAmount) {
+            try {
+              // Ajusta el payload según tu API (aquí actualizamos amount y mantenemos otros campos)
+              await apiService.transactions.update(txId, { amount: newAmount })
+              return { id: txId, ok: true }
+            } catch (err) {
+              console.error(`Fallo updating tx ${txId}:`, err)
+              return { id: txId, ok: false, error: err }
+            }
+          }
+          return { id: txId, ok: true }
+        })
+
+        const results = await Promise.all(updates)
+        const failed = results.filter(r => !r.ok)
+        if (failed.length) {
+          setApplyError(`Algunas actualizaciones fallaron (${failed.length}). Revisa la consola.`)
+        } else {
+          // recargar datos y balance
+          await loadData()
+          await refreshBalance()
+        }
+      }
+
+    } catch (err) {
+      console.error("Error aplicando recomendaciones:", err)
+      setApplyError(err.message || "Error al aplicar recomendaciones")
+    } finally {
+      setApplyLoading(false)
+      setModalOpen(false)
+    }
+  }
+
+  // -------------------------
+  // RENDER
+  // -------------------------
   if (loading) {
     return (
       <DashboardLayout hideBudget={true}>
@@ -277,10 +388,10 @@ const IncomeExpenses = () => {
         </div>
 
         {/* Error Message */}
-        {error && (
+        {(error || recError) && (
           <div className="error-message">
             <i className="icon-warning"></i>
-            {error}
+            {error ? error : (recError?.message ?? String(recError))}
           </div>
         )}
 
@@ -297,10 +408,16 @@ const IncomeExpenses = () => {
                 </span>
               </div>
               <div className="balance-actions">
-                <button className="btn-recommendations">
-                  Recomendaciones
+                {/* Reemplazamos el botón negro para usar la lógica de recomendaciones */}
+                <button
+                  onClick={handleGenerate}
+                  disabled={recLoading}
+                  className="btn-recommendations"
+                >
+                  {recLoading ? 'Analizando...' : 'Recomendaciones'}
                   <span className="notification-badge">2</span>
                 </button>
+
                 <button className="btn-alerts">
                   <i className="icon-warning"></i>
                   Alertas
@@ -343,7 +460,7 @@ const IncomeExpenses = () => {
                     </span>
                   </div>
                   <p className="data-subtitle">Datos registrados</p>
-                  
+
                   <div className="income-items">
                     {incomeTransactions.slice(0, 5).map((transaction) => (
                       <div key={transaction.id} className="income-item">
@@ -356,13 +473,13 @@ const IncomeExpenses = () => {
                       </div>
                     ))}
                   </div>
-                  
+
                   <div className="total-income">
                     Total ingresos: {formatCurrency(calculateTotalIncome())}
                   </div>
-                  
+
                   <div className="card-actions">
-                    <button 
+                    <button
                       className="btn-add-income"
                       onClick={() => {
                         setTransactionType('income')
@@ -411,7 +528,7 @@ const IncomeExpenses = () => {
                     </span>
                   </div>
                   <p className="data-subtitle">Datos registrados</p>
-                  
+
                   <div className="expense-items">
                     {expenseTransactions.slice(0, 5).map((transaction) => (
                       <div key={transaction.id} className="expense-item">
@@ -424,13 +541,13 @@ const IncomeExpenses = () => {
                       </div>
                     ))}
                   </div>
-                  
+
                   <div className="total-expense">
                     Total gastos: {formatCurrency(calculateTotalExpenses())}
                   </div>
-                  
+
                   <div className="card-actions">
-                    <button 
+                    <button
                       className="btn-add-expense"
                       onClick={() => {
                         setTransactionType('expense')
@@ -455,7 +572,7 @@ const IncomeExpenses = () => {
           <div className="form-overlay">
             <div className="form-container">
               <h2>{editingTransaction ? 'Editar Transacción' : `Añadir ${transactionType === 'income' ? 'Ingreso' : 'Gasto'}`}</h2>
-              
+
               <form onSubmit={handleSubmit(onSubmit)} className="transaction-form">
                 <div className="form-group">
                   <label>Monto *</label>
@@ -468,7 +585,7 @@ const IncomeExpenses = () => {
                   />
                   <input
                     type="hidden"
-                    {...register('amount', { 
+                    {...register('amount', {
                       required: 'El monto es obligatorio',
                       min: { value: 0.01, message: 'El monto debe ser mayor a 0' }
                     })}
@@ -503,7 +620,7 @@ const IncomeExpenses = () => {
                 <div className="form-group">
                   <label>Descripción</label>
                   <textarea
-                    {...register('description', { 
+                    {...register('description', {
                       maxLength: { value: 200, message: 'Máximo 200 caracteres' }
                     })}
                     className={errors.description ? 'error' : ''}
@@ -525,6 +642,17 @@ const IncomeExpenses = () => {
             </div>
           </div>
         )}
+
+        {/* Modal de recomendaciones */}
+        <RecommendationModal
+          open={modalOpen}
+          onClose={() => setModalOpen(false)}
+          recommendationsResponse={recData}
+          onApply={() => applyRecommendationsPersistent(true)} // aplica y persiste
+        />
+
+        {applyLoading && <div className="mt-2 text-sm">Aplicando recomendaciones...</div>}
+        {applyError && <div className="mt-2 text-sm text-red-600">Error: {applyError}</div>}
       </div>
     </DashboardLayout>
   )
